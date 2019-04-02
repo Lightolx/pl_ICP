@@ -17,5 +17,11 @@ ELSE(GSL_FOUND)
     MESSAGE(ERROR "GSL not found.")
 ENDIF(GSL_FOUND)
 
+find_package(Sophus REQUIRED)
+include_directories(${Sophus_INCLUDE_DIRS})
+
+find_package(Ceres REQUIRED)
+include_directories(${CERES_INCLUDE_DIRS})
+
 add_executable(pl_ICP main.cpp gpc.cpp gpc.h)
-target_link_libraries(pl_ICP ${GSL_LIBRARIES})
+target_link_libraries(pl_ICP ${GSL_LIBRARIES} ${CERES_LIBRARIES} ${Sophus_LIBRARIES})

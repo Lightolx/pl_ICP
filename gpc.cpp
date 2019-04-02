@@ -14,38 +14,30 @@
 using std::cout;
 using std::endl;
 
-int gpc_solve(int K, const struct gpc_corr*c, double *x) {
-    return gpc_solve_valid(K,c,0,x);
+int gpc_solve(int numPts, const struct gpc_corr*c, double *x) {
+    return gpc_solve_valid(numPts, c, x);
 }
 
-int gpc_solve_valid(int K, const struct gpc_corr*c, int*valid, double *x_out) {
-    Eigen::Matrix4d bigM = Eigen::Matrix4d::Zero();
+int gpc_solve_valid(int numPts, const struct gpc_corr*c, double *x_out) {
+    Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
     Eigen::Vector4d g = Eigen::Vector4d::Zero();
+    
+    for(int i = 0;i < numPts;i++) {
+        // 这里把pi从Vector2d改写成4*2的Matrix类似于变换为齐次坐标
+        Eigen::Matrix<double, 2, 4> pi = Eigen::Matrix<double, 2, 4>::Identity();
+        pi.col(2) = c[i].p;
+        pi(0, 3) = -c[i].p[1];
+        pi(1, 3) = c[i].p[0];
 
-    int k;
-    for(k=0;k<K;k++) {
-        if(valid && !valid[k]) continue;
+        Eigen::Matrix2d Ci = c[i].normal * c[i].normal.transpose();
+//        Ci = Eigen::Matrix2d::Identity();
 
-        Eigen::Matrix<double, 2, 4> Mi = Eigen::Matrix<double, 2, 4>::Identity();
-        Mi(0, 2) = c[k].p[0];
-        Mi(0, 3) = -c[k].p[1];
-        Mi(1, 2) = c[k].p[1];
-        Mi(1, 3) = c[k].p[0];
+        Eigen::Vector2d qi = c[i].q;
 
-        Eigen::Matrix2d Ci = c[k].normal * c[k].normal.transpose();
-//        Ci(0, 0) = c[k].C[0][0];
-//        Ci(0, 1) = c[k].C[0][1];
-//        Ci(1, 0) = c[k].C[1][0];
-//        Ci(1, 1) = c[k].C[1][1];
+        Eigen::Matrix4d Mi = 2 * pi.transpose() * Ci * pi;
+        M += Mi;
 
-        Eigen::Vector2d qi = Eigen::Vector2d::Zero();
-        qi(0) = c[k].q[0];
-        qi(1) = c[k].q[1];
-
-        Eigen::Matrix4d M = 2 * Mi.transpose() * Ci * Mi;
-        bigM += M;
-
-        Eigen::Vector4d gi = -2 * qi.transpose() * Ci * Mi;
+        Eigen::Vector4d gi = -2 * qi.transpose() * Ci * pi;
         g += gi;
 
         if(1) {
@@ -61,17 +53,15 @@ int gpc_solve_valid(int K, const struct gpc_corr*c, int*valid, double *x_out) {
     }
 
     if(1) {
-        cout << "bigM =\n" << bigM << endl;
+        cout << "M =\n" << M << endl;
         cout << "g =\n" << g << endl;
     }
 
-    Eigen::Matrix2d A = bigM.topLeftCorner(2, 2);
-    Eigen::Matrix2d B = bigM.topRightCorner(2, 2);
-    Eigen::Matrix2d D = bigM.bottomRightCorner(2, 2);
+    Eigen::Matrix2d A = M.topLeftCorner(2, 2);
+    Eigen::Matrix2d B = M.topRightCorner(2, 2);
+    Eigen::Matrix2d D = M.bottomRightCorner(2, 2);
     Eigen::Matrix2d S = D - B.transpose() * A.inverse() * B;
     Eigen::Matrix2d Sa = S.inverse() * S.determinant();
-
-
 
     if(1) {
         cout << "A =\n" << A << endl;
@@ -115,7 +105,7 @@ int gpc_solve_valid(int K, const struct gpc_corr*c, int*valid, double *x_out) {
 
     Eigen::Matrix4d W = Eigen::Matrix4d::Zero();
     W.bottomRightCorner(2, 2) = Eigen::Matrix2d::Identity();
-    Eigen::Vector4d x = -(bigM + 2 * lambda * W).inverse() * g;
+    Eigen::Vector4d x = -(M + 2 * lambda * W).inverse() * g;
 
 
     x_out[0] = x[0];
@@ -136,7 +126,7 @@ double gpc_error(const struct gpc_corr*co, const double*x) {
     double e[2];
     e[0] = c*(co->p[0]) -s*(co->p[1]) + x[0] - co->q[0];
     e[1] = s*(co->p[0]) +c*(co->p[1]) + x[1] - co->q[1];
-    return e[0]*e[0]*co->C[0][0]+2*e[0]*e[1]*co->C[0][1]+e[1]*e[1]*co->C[1][1];
+//    return e[0]*e[0]*co->C[0][0]+2*e[0]*e[1]*co->C[0][1]+e[1]*e[1]*co->C[1][1];
 }
 
 double poly_greatest_real_root(unsigned int n, double*a) {

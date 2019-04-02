@@ -8,11 +8,9 @@
 #include <eigen3/Eigen/Eigen>
 
 
-struct gpc_corr {
-    double p[2];
-    double q[2];
-
-    double C[2][2];
+struct gpc_corr {  // 线段pq在直线法线方向上的投影
+    Eigen::Vector2d p;
+    Eigen::Vector2d q;
     Eigen::Vector2d normal;  // 匹配直线的法向量
 };
 
@@ -24,10 +22,10 @@ struct gpc_corr {
 // (see the attached documentation for details).
 */
 
-int gpc_solve(int K, const struct gpc_corr*, double *x);
+int gpc_solve(int numPts, const struct gpc_corr*, double *x);
 
 /* if valid[k] is 0, the correspondence is not used */
-int gpc_solve_valid(int K, const struct gpc_corr*, int*valid, double *x);
+int gpc_solve_valid(int numPts, const struct gpc_corr*, double *x);
 
 /* Some utilities functions */
 
