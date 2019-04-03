@@ -23,5 +23,9 @@ include_directories(${Sophus_INCLUDE_DIRS})
 find_package(Ceres REQUIRED)
 include_directories(${CERES_INCLUDE_DIRS})
 
+find_package(PCL REQUIRED)
+include_directories(${PCL_INCLUDE_DIRS})
+add_definitions(${PCL_DEFINITIONS})
+
 add_executable(pl_ICP main.cpp gpc.cpp gpc.h)
-target_link_libraries(pl_ICP ${GSL_LIBRARIES} ${CERES_LIBRARIES} ${Sophus_LIBRARIES})
+target_link_libraries(pl_ICP ${GSL_LIBRARIES} ${CERES_LIBRARIES} ${Sophus_LIBRARIES} ${PCL_LIBRARIES})
