@@ -83,6 +83,15 @@ struct Correspondence_pt2pt {
     Eigen::Vector2d q;
 };
 
+struct LanePoint {
+    Eigen::Vector2d pt;
+    bool bStopline;
+    int laneID;             // 该点归属于哪条车道线
+
+    LanePoint(Eigen::Vector2d _pt, int _laneID, bool _bStopline) : pt(_pt), bStopline(_bStopline), laneID(_laneID) {
+    }
+};
+
 int main(int argc, char** argv) {
     // Step1: 构造数据P, Q点集
     double theta0 = -30;
@@ -99,13 +108,13 @@ int main(int argc, char** argv) {
     cout << "ground truth is\n" << "theta = " << -theta0 << ", t = " << t1.transpose() << endl;
 
     // step1.1: 构造数据集Q，对应着高精地图
-    std::vector<Eigen::Vector2d> vPts_Q;
+    std::vector<LanePoint> vPts_Q;
     double sigma = 0.1;
-    int numLanes = 2;
+    int numLanes = 4;
     // 直线段，从[15, -100]到[15, 0]，1m一个;从[18.5, -100]到[18.5, 0]，1m一个;
     for (int i = -100; i < 0; ++i) {
         for (int j = 0; j < numLanes; ++j) {
-            vPts_Q.push_back(Eigen::Vector2d(15 + j * 3.5, i));
+            vPts_Q.push_back(LanePoint(Eigen::Vector2d(15 + j * 3.5, i), j, false));
         }
     }
 
@@ -115,56 +124,53 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 90; ++i) {
         for (int j = 0; j < numLanes; ++j) {
             point = c0 + (15 + j * 3.5) * Eigen::Vector2d(cos(deg2rad(i)), sin(deg2rad(i)));
-            vPts_Q.push_back(point);
+            vPts_Q.push_back(LanePoint(point, j, false));
         }
         i++;
     }
 
-
     // 直线段，从[0, 15]到[-100, 15]，1m一个;从[0, 18.5]到[-100, 18.5]，1m一个
-    for (int i = 0; i >= -100; --i) {
+    for (int i = 0; i > -100; --i) {
         for (int j = 0; j < numLanes; ++j) {
-            vPts_Q.push_back(Eigen::Vector2d(i, 15 + j * 3.5));
+            vPts_Q.push_back(LanePoint(Eigen::Vector2d(i, 15 + j * 3.5), j, false));
+        }
+    }
+
+    // 加入stopline
+    {
+        int i = -100;
+        for (int j = 0; j < numLanes; ++j) {
+            vPts_Q.push_back(LanePoint(Eigen::Vector2d(i, 15 + j * 3.5), j, true));
         }
     }
 
     // step1.2: 从点集Q中截取出来一段，构造点集P
-    std::vector<Eigen::Vector2d> vPts_P;
-    std::vector<bool> vbStopline;
-//    for (int i = 537; i < 316; ++i) {        // [0, 29]
-    for (int i = vPts_Q.size() - 57; i < vPts_Q.size(); ++i) {        // [0, 29]
+    std::vector<LanePoint> vPts_P;
+//    for (int i = 330; i < 540; ++i) {        // [0, 29]
+    for (int i = vPts_Q.size() - 150; i < vPts_Q.size(); ++i) {        // [0, 29]
         vPts_P.push_back(vPts_Q[i]);
-        bool bStopline = false;
-        for (int j = 0; j < numLanes; ++j) {
-            if (i == vPts_Q.size() - j - 1) {
-                bStopline = true;
-            }
-        }
-
-        vbStopline.push_back(bStopline);
-
     }
 
     // 分别给P,Q添加噪声
     for (auto &p : vPts_Q) {
-        p += 0.5*sigma * Eigen::Vector2d::Random();
+        p.pt += 0.5*sigma * Eigen::Vector2d::Random();
     }
 
     for (auto &p : vPts_P) {
-        p += 3 * sigma * Eigen::Vector2d::Random();
+        p.pt += 3 * sigma * Eigen::Vector2d::Random();
     }
 
     // 存储点集Q
     std::ofstream fout2("q.txt");
     for (auto p : vPts_Q) {
-        fout2 << p[0] << " " << p[1] << endl;
+        fout2 << p.pt[0] << " " << p.pt[1] << endl;
     }
     fout2.close();
 
     // 存储点集P
     std::ofstream fout1("p01.txt");
     for (auto p : vPts_P) {
-        fout1 << p[0] << " " << p[1] << endl;
+        fout1 << p.pt[0] << " " << p.pt[1] << endl;
     }
     fout1.close();
 
@@ -172,17 +178,16 @@ int main(int argc, char** argv) {
     std::ofstream fout4("p02.txt");
     int numPts = vPts_P.size();
     for (int i = 0; i < numPts; ++i) {
-        point = vPts_P[i];
+        point = vPts_P[i].pt;
         point = R0 * point + t0;
         fout4 << point[0] << " " << point[1] << endl;
-        vPts_P[i] = point;
+        vPts_P[i].pt = point;
     }
     fout4.close();
 
     // Step2: icp过程
     // step2.0: 初值，应该由别处给出
     double pT[3];
-
     pT[0] = 0;
     pT[1] = 0;
     pT[2] = 0;
@@ -190,20 +195,31 @@ int main(int argc, char** argv) {
 //    pT[1] = t1(1) + (rand() % 10 - 5)/500.0;
 //    pT[2] = -theta + (rand() % 10 - 5)/500.0;
 
-    // 将点云Q做成kd_tree;
-    pcl::PointCloud<pcl::PointXY>::Ptr cloud(new pcl::PointCloud<pcl::PointXY>);
-    // Generate pointcloud data
-    cloud->width = vPts_Q.size();
-    cloud->height = 1;
-    cloud->points.resize (cloud->width * cloud->height);
+    // 将点云Q做成kd_tree，HDMap里有几条lane就做成几棵树
+    std::map<int, pcl::PointCloud<pcl::PointXY>::Ptr> mCloud;
+    for (int i = 0; i < numLanes; ++i) {
+        std::vector<Eigen::Vector2d> pts;
+        for (auto p : vPts_Q) {
+            if (p.laneID == i) {
+                pts.push_back(p.pt);
+            }
+        }
 
-    for (size_t i = 0; i < cloud->points.size (); ++i) {
-        cloud->points[i].x = vPts_Q[i].x();
-        cloud->points[i].y = vPts_Q[i].y();
+        pcl::PointCloud<pcl::PointXY>::Ptr cloud(new pcl::PointCloud<pcl::PointXY>);
+        // Generate pointcloud data
+        cloud->width = pts.size();
+        cloud->height = 1;
+        cloud->points.resize (cloud->width * cloud->height);
+        for (int j = 0; j < pts.size(); ++j) {
+            cloud->points[j].x = pts[j].x();
+            cloud->points[j].y = pts[j].y();
+        }
+
+        mCloud[i] = cloud;
     }
 
+
     pcl::KdTreeFLANN<pcl::PointXY> kdtree;
-    kdtree.setInputCloud (cloud);
     pcl::PointXY searchPoint;
 
     // 这里迭代终止条件是固定迭代次数
@@ -225,22 +241,29 @@ int main(int argc, char** argv) {
             Eigen::Vector2d q1 = Eigen::Vector2d::Zero();
             Eigen::Vector2d q2 = Eigen::Vector2d::Zero();
             std::stringstream ss;
-//        ss << "p1" << iter << ".txt";
             ss << "p1" << 1 << ".txt";
             std::ofstream fout3(ss.str());
-            for (int i = 0; i < vPts_P.size(); i++) {
-                auto p = vPts_P[i];
+            for (auto point : vPts_P) {
+                auto p = point.pt;
                 Eigen::Vector2d p1 = R * p + t;
                 fout3 << p1[0] << " " << p1[1] << endl;
                 // 寻找点云Q中离p1最近的两个点
                 searchPoint.x = p1.x();
                 searchPoint.y = p1.y();
+                kdtree.setInputCloud(mCloud[point.laneID]);
                 kdtree.nearestKSearch(searchPoint, K, pointIdxNKNSearch, pointNKNSquaredDistance);
-                q1 = vPts_Q[pointIdxNKNSearch[0]];
-                q2 = vPts_Q[pointIdxNKNSearch[1]];
-                if (vbStopline[i]) {
-                    q1 = vPts_Q[vPts_Q.size() - 1];
-                    q2 = vPts_Q[vPts_Q.size() - 2];
+//                cout << "nearest id1 = " << pointIdxNKNSearch[0] << endl;
+//                cout << "nearest id2 = " << pointIdxNKNSearch[1] << endl;
+                auto nearPt = mCloud[point.laneID]->points[pointIdxNKNSearch[0]];
+                q1 = Eigen::Vector2d(nearPt.x, nearPt.y);  // todo:: 这里有bug,这个id不对
+                nearPt = mCloud[point.laneID]->points[pointIdxNKNSearch[1]];
+                q2 = Eigen::Vector2d(nearPt.x, nearPt.y);
+
+//                cout << "p1 - q1 = " << (p1 - q1).norm() << endl;
+//                cout << "p1 - q2 = " << (p1 - q2).norm() << endl;
+                if (point.bStopline) {
+                    q1 = vPts_Q[vPts_Q.size() - 1].pt;
+                    q2 = vPts_Q[vPts_Q.size() - 2].pt;
                 }
 
                 Eigen::Vector2d l = q1 - q2;
@@ -291,6 +314,13 @@ int main(int argc, char** argv) {
 //                cout << "iterations = " << iter << endl;
 //                break;
 //            }
+//            cout << "summary.initial_cost = " << summary.initial_cost << ", summary.final_cost = " << summary.final_cost << endl;
+//            cout << "num_residual_blocks = " << summary.num_residual_blocks << endl;
+            // 每一个残差块的平均误差小于10e-8, 则认为已经收敛(不确定是收敛到局部最优解还是全局最优解)，可以结束迭代
+            if((fabs(summary.initial_cost - summary.final_cost) / summary.initial_cost) / summary.num_residual_blocks < 10e-8) {
+                cout << "iterations = " << iter << endl;
+                break;
+            }
         } else {
             std::vector<Correspondence_pt2pt> vCors;
             vCors.reserve(vPts_P.size());
@@ -310,15 +340,17 @@ int main(int argc, char** argv) {
             ss << "p1" << 1 << ".txt";
             std::ofstream fout3(ss.str());
             for (auto p : vPts_P) {
-                Eigen::Vector2d p1 = R * p + t;
+                Eigen::Vector2d p1 = R * p.pt + t;
                 fout3 << p1[0] << " " << p1[1] << endl;
                 // 寻找点云Q中离p1最近的两个点
                 searchPoint.x = p1.x();
                 searchPoint.y = p1.y();
+                kdtree.setInputCloud(mCloud[p.laneID]);
                 kdtree.nearestKSearch(searchPoint, K, pointIdxNKNSearch, pointNKNSquaredDistance);
-                q1 = vPts_Q[pointIdxNKNSearch[0]];
+                auto nearPt = mCloud[p.laneID]->points[pointIdxNKNSearch[0]];
+                q1 = Eigen::Vector2d(nearPt.x, nearPt.y);  // todo:: 这里有bug,这个id不对
                 Correspondence_pt2pt cor;
-                cor.p = p;
+                cor.p = p.pt;
                 cor.q = q1;
                 vCors.push_back(cor);
             }
@@ -359,9 +391,13 @@ int main(int argc, char** argv) {
 //            cout << "iterations = " << iter << endl;
 //            break;
 //        }
+        cout << "summary.initial_cost = " << summary.initial_cost << ", summary.final_cost = " << summary.final_cost << endl;
+        if(fabs(summary.initial_cost - summary.final_cost) / summary.initial_cost < 10e-8) {
+            cout << "iterations = " << iter << endl;
+            break;
         }
 
-
+        }
     }
 
     // step2.3: 最终输出pose
