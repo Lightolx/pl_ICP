@@ -85,12 +85,12 @@ struct Correspondence_pt2pt {
 
 int main(int argc, char** argv) {
     // Step1: 构造数据P, Q点集
-    double theta0 = -5;
+    double theta0 = -30;
     double theta = deg2rad(theta0);
     Eigen::Matrix2d R0 = Eigen::Matrix2d::Zero();
     R0 << cos(theta), -sin(theta),
          sin(theta),  cos(theta);
-    Eigen::Vector2d t0(0.8, -1.2);
+    Eigen::Vector2d t0(4.1, -3.8);
     Eigen::Matrix3d T0 = Eigen::Matrix3d::Identity();
     T0.topLeftCorner(2, 2) = R0;
     T0.topRightCorner(2, 1) = t0;
@@ -101,44 +101,48 @@ int main(int argc, char** argv) {
     // step1.1: 构造数据集Q，对应着高精地图
     std::vector<Eigen::Vector2d> vPts_Q;
     double sigma = 0.1;
-    // 直线段，从[15, -100]到[15, 0]，1m一个
+    int numLanes = 2;
+    // 直线段，从[15, -100]到[15, 0]，1m一个;从[18.5, -100]到[18.5, 0]，1m一个;
     for (int i = -100; i < 0; ++i) {
-        vPts_Q.push_back(Eigen::Vector2d(15, i));
+        for (int j = 0; j < numLanes; ++j) {
+            vPts_Q.push_back(Eigen::Vector2d(15 + j * 3.5, i));
+        }
     }
 
-    // 弧线段，从[15, 0]到[0, 15]，1°一个
+    // 弧线段，从[15, 0]到[0, 15]，1°一个;从[18.5, 0]到[0, 18.5]，1°一个
     Eigen::Vector2d c0(0, 0);
     Eigen::Vector2d point = Eigen::Vector2d::Zero();
     for (int i = 0; i < 90; ++i) {
-        point = c0 + 15 * Eigen::Vector2d(cos(deg2rad(i)), sin(deg2rad(i)));
-        vPts_Q.push_back(point);
+        for (int j = 0; j < numLanes; ++j) {
+            point = c0 + (15 + j * 3.5) * Eigen::Vector2d(cos(deg2rad(i)), sin(deg2rad(i)));
+            vPts_Q.push_back(point);
+        }
+        i++;
     }
 
 
-    // 直线段，从[-100, 15]到[0, 15]，1m一个
+    // 直线段，从[0, 15]到[-100, 15]，1m一个;从[0, 18.5]到[-100, 18.5]，1m一个
     for (int i = 0; i >= -100; --i) {
-        vPts_Q.push_back(Eigen::Vector2d(i, 15));
-    }
-
-    // 所有的点都往右平移3.5m，构造出两条车道
-    std::vector<Eigen::Vector2d> vPts_Q1;
-    vPts_Q1.resize(vPts_Q.size());
-    Eigen::Vector2d laneOffset(2.5, 2.5);
-    for (int i = 0; i < vPts_Q.size(); ++i) {
-        vPts_Q1[i] = vPts_Q[i] + laneOffset;
-    }
-
-    std::vector<Eigen::Vector2d> vPts_Q2 = vPts_Q;
-    vPts_Q.clear();
-    for (int i = 0; i < vPts_Q1.size(); ++i) {
-        vPts_Q.push_back(vPts_Q1[i]);
-        vPts_Q.push_back(vPts_Q2[i]);
+        for (int j = 0; j < numLanes; ++j) {
+            vPts_Q.push_back(Eigen::Vector2d(i, 15 + j * 3.5));
+        }
     }
 
     // step1.2: 从点集Q中截取出来一段，构造点集P
     std::vector<Eigen::Vector2d> vPts_P;
-    for (int i = 330; i < 450; ++i) {        // [0, 29]
+    std::vector<bool> vbStopline;
+//    for (int i = 537; i < 316; ++i) {        // [0, 29]
+    for (int i = vPts_Q.size() - 57; i < vPts_Q.size(); ++i) {        // [0, 29]
         vPts_P.push_back(vPts_Q[i]);
+        bool bStopline = false;
+        for (int j = 0; j < numLanes; ++j) {
+            if (i == vPts_Q.size() - j - 1) {
+                bStopline = true;
+            }
+        }
+
+        vbStopline.push_back(bStopline);
+
     }
 
     // 分别给P,Q添加噪声
@@ -147,7 +151,7 @@ int main(int argc, char** argv) {
     }
 
     for (auto &p : vPts_P) {
-        p += 2 * sigma * Eigen::Vector2d::Random();
+        p += 3 * sigma * Eigen::Vector2d::Random();
     }
 
     // 存储点集Q
@@ -224,7 +228,8 @@ int main(int argc, char** argv) {
 //        ss << "p1" << iter << ".txt";
             ss << "p1" << 1 << ".txt";
             std::ofstream fout3(ss.str());
-            for (auto p : vPts_P) {
+            for (int i = 0; i < vPts_P.size(); i++) {
+                auto p = vPts_P[i];
                 Eigen::Vector2d p1 = R * p + t;
                 fout3 << p1[0] << " " << p1[1] << endl;
                 // 寻找点云Q中离p1最近的两个点
@@ -233,6 +238,11 @@ int main(int argc, char** argv) {
                 kdtree.nearestKSearch(searchPoint, K, pointIdxNKNSearch, pointNKNSquaredDistance);
                 q1 = vPts_Q[pointIdxNKNSearch[0]];
                 q2 = vPts_Q[pointIdxNKNSearch[1]];
+                if (vbStopline[i]) {
+                    q1 = vPts_Q[vPts_Q.size() - 1];
+                    q2 = vPts_Q[vPts_Q.size() - 2];
+                }
+
                 Eigen::Vector2d l = q1 - q2;
                 l.normalize();
                 Eigen::Vector2d normal(l[1], -l[0]);
@@ -268,8 +278,6 @@ int main(int argc, char** argv) {
 
                 problem.AddResidualBlock(pCostFunction, nullptr, pT);
             }
-
-//        problem.SetParameterBlockConstant(pT+1);
 
             ceres::Solver::Options options;
             options.linear_solver_type = ceres::DENSE_QR;
