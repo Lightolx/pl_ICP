@@ -5,8 +5,6 @@
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
 #include <glog/logging.h>
-#include <pcl/point_cloud.h>
-#include <pcl/kdtree/kdtree_flann.h>
 #include <fstream>
 #include <cfloat>
 #include "gpc.h"
@@ -17,9 +15,13 @@ using std::cout;
 using std::endl;
 
 struct RegisterError {
-    RegisterError(Eigen::Vector2d _p, Eigen::Vector2d _q, Eigen::Vector2d _normal):
-    p(_p), q(_q), normal(_normal)
-    {}
+    RegisterError(Eigen::Vector2d _p, Eigen::Vector2d _q1, Eigen::Vector2d _q2):
+    p(_p), q(_q1)
+    {
+        Eigen::Vector2d l = _q1 - _q2;
+        l.normalize();
+        normal = Eigen::Vector2d(l[1], -l[0]);
+    }
 
     template <typename T>
     bool operator()(const T* pT, T* residual) const {
@@ -47,8 +49,8 @@ struct RegisterError {
 
 struct Correspondence_pt2line {
     Eigen::Vector2d p;
-    Eigen::Vector2d q;
-    Eigen::Vector2d normal;
+    Eigen::Vector2d q1;
+    Eigen::Vector2d q2;
 };
 
 struct RegisterError_pt2pt {
@@ -93,6 +95,7 @@ struct LanePoint {
 };
 
 int main(int argc, char** argv) {
+    /*
     // Step1: 构造数据P, Q点集
     double theta0 = -30;
     double theta = deg2rad(theta0);
@@ -184,6 +187,36 @@ int main(int argc, char** argv) {
         vPts_P[i].pt = point;
     }
     fout4.close();
+    */
+
+    std::vector<Eigen::Vector2d> vPts_P;
+    std::vector<Eigen::Vector2d> vPts_Q;
+    {
+        std::ifstream fin("/data/test/STCC_SH/pr_lines13.txt");
+        std::string ptline;
+        Eigen::Vector2d temp(0, 0);
+        while (getline(fin, ptline))
+        {
+            std::stringstream ss(ptline);
+            ss >> temp[0];
+            ss >> temp[1];
+            vPts_P.push_back(temp);
+        }
+    }
+
+
+    {
+        std::ifstream fin("/data/test/STCC_SH/hdm_lines13.txt");
+        std::string ptline;
+        Eigen::Vector2d temp(0, 0);
+        while (getline(fin, ptline))
+        {
+            std::stringstream ss(ptline);
+            ss >> temp[0];
+            ss >> temp[1];
+            vPts_Q.push_back(temp);
+        }
+    }
 
     // Step2: icp过程
     // step2.0: 初值，应该由别处给出
@@ -194,33 +227,6 @@ int main(int argc, char** argv) {
 //    pT[0] = t1(0) + (rand() % 10 - 5)/500.0;
 //    pT[1] = t1(1) + (rand() % 10 - 5)/500.0;
 //    pT[2] = -theta + (rand() % 10 - 5)/500.0;
-
-    // 将点云Q做成kd_tree，HDMap里有几条lane就做成几棵树
-    std::map<int, pcl::PointCloud<pcl::PointXY>::Ptr> mCloud;
-    for (int i = 0; i < numLanes; ++i) {
-        std::vector<Eigen::Vector2d> pts;
-        for (auto p : vPts_Q) {
-            if (p.laneID == i) {
-                pts.push_back(p.pt);
-            }
-        }
-
-        pcl::PointCloud<pcl::PointXY>::Ptr cloud(new pcl::PointCloud<pcl::PointXY>);
-        // Generate pointcloud data
-        cloud->width = pts.size();
-        cloud->height = 1;
-        cloud->points.resize (cloud->width * cloud->height);
-        for (int j = 0; j < pts.size(); ++j) {
-            cloud->points[j].x = pts[j].x();
-            cloud->points[j].y = pts[j].y();
-        }
-
-        mCloud[i] = cloud;
-    }
-
-
-    pcl::KdTreeFLANN<pcl::PointXY> kdtree;
-    pcl::PointXY searchPoint;
 
     // 这里迭代终止条件是固定迭代次数
     bool bPL = std::atoi(argv[1]);
@@ -235,44 +241,34 @@ int main(int argc, char** argv) {
                     sin(alpha),  cos(alpha);
             Eigen::Vector2d t = Eigen::Vector2d(pT[0], pT[1]);
 
-            int K = 2;
-            std::vector<int> pointIdxNKNSearch(K);
-            std::vector<float> pointNKNSquaredDistance(K);
             Eigen::Vector2d q1 = Eigen::Vector2d::Zero();
             Eigen::Vector2d q2 = Eigen::Vector2d::Zero();
             std::stringstream ss;
             ss << "p1" << 1 << ".txt";
             std::ofstream fout3(ss.str());
             for (auto point : vPts_P) {
-                auto p = point.pt;
+                auto p = point;
                 Eigen::Vector2d p1 = R * p + t;
                 fout3 << p1[0] << " " << p1[1] << endl;
                 // 寻找点云Q中离p1最近的两个点
-                searchPoint.x = p1.x();
-                searchPoint.y = p1.y();
-                kdtree.setInputCloud(mCloud[point.laneID]);
-                kdtree.nearestKSearch(searchPoint, K, pointIdxNKNSearch, pointNKNSquaredDistance);
-//                cout << "nearest id1 = " << pointIdxNKNSearch[0] << endl;
-//                cout << "nearest id2 = " << pointIdxNKNSearch[1] << endl;
-                auto nearPt = mCloud[point.laneID]->points[pointIdxNKNSearch[0]];
-                q1 = Eigen::Vector2d(nearPt.x, nearPt.y);  // todo:: 这里有bug,这个id不对
-                nearPt = mCloud[point.laneID]->points[pointIdxNKNSearch[1]];
-                q2 = Eigen::Vector2d(nearPt.x, nearPt.y);
-
-//                cout << "p1 - q1 = " << (p1 - q1).norm() << endl;
-//                cout << "p1 - q2 = " << (p1 - q2).norm() << endl;
-                if (point.bStopline) {
-                    q1 = vPts_Q[vPts_Q.size() - 1].pt;
-                    q2 = vPts_Q[vPts_Q.size() - 2].pt;
+                std::vector<std::pair<Eigen::Vector2d, double> > vpDists;
+                for (int i = 0; i < vPts_Q.size(); ++i) {
+                    auto q = vPts_Q[i];
+                    vpDists.push_back(std::make_pair(q, (p1 - q).norm()));
                 }
 
-                Eigen::Vector2d l = q1 - q2;
-                l.normalize();
-                Eigen::Vector2d normal(l[1], -l[0]);
+                std::sort(vpDists.begin(), vpDists.end(),
+                        [](std::pair<Eigen::Vector2d, double> const &a,
+                           std::pair<Eigen::Vector2d, double> const &b) {
+                            return a.second < b.second;
+                });
+                q1 = vpDists[0].first;
+                q2 = vpDists[1].first;
+
                 Correspondence_pt2line cor;
                 cor.p = p;
-                cor.q = q1;
-                cor.normal = normal;
+                cor.q1 = q1;
+                cor.q2 = q2;
                 vCors.push_back(cor);
 //            cout << "normal = " << normal.transpose() << endl;
             }
@@ -280,27 +276,32 @@ int main(int argc, char** argv) {
 
             // step2.2: 根据point_to_line的correspondence来计算相对变换R,t
             // 算之前检查一下error
-            double sumError = 0;
-            for (int i = 0; i < vPts_P.size(); ++i) {
-                // 三个1, 1, 1分别表示residual的维度， 第一个优化变量c的维度， 第二个优化变量m的维度
-                auto p = vCors[i].p;
-                auto q = vCors[i].q;
-                auto normal = vCors[i].normal;
-                auto p1 = R*p + t;
-                auto pq = q - p1;
-                double error = pq.dot(normal);
-                sumError += 0.5 * error * error;
-            }
-            cout << "sumError = " << sumError << endl;
+//            double sumError = 0;
+//            for (int i = 0; i < vPts_P.size(); ++i) {
+//                // 三个1, 1, 1分别表示residual的维度， 第一个优化变量c的维度， 第二个优化变量m的维度
+//                auto p = vCors[i].p;
+//                auto q = vCors[i].q;
+//                auto normal = vCors[i].normal;
+//                auto p1 = R*p + t;
+//                auto pq = q - p1;
+//                double error = pq.dot(normal);
+//                sumError += 0.5 * error * error;
+//            }
+//            cout << "sumError = " << sumError << endl;
 
             ceres::Problem problem;
             for (int i = 0; i < vPts_P.size(); ++i) {
                 // 三个1, 1, 1分别表示residual的维度， 第一个优化变量c的维度， 第二个优化变量m的维度
                 ceres::CostFunction* pCostFunction = new ceres::AutoDiffCostFunction<RegisterError, 1, 3>(
-                        new RegisterError(vCors[i].p, vCors[i].q, vCors[i].normal));
+                        new RegisterError(vCors[i].p, vCors[i].q1, vCors[i].q2));
 
                 problem.AddResidualBlock(pCostFunction, nullptr, pT);
             }
+
+            problem.SetParameterLowerBound(pT, 2, -1e-6);
+            problem.SetParameterUpperBound(pT, 2, 1e-6);
+            problem.SetParameterLowerBound(pT, 2, -0.02);
+            problem.SetParameterUpperBound(pT, 2, 0.02);
 
             ceres::Solver::Options options;
             options.linear_solver_type = ceres::DENSE_QR;
@@ -339,22 +340,22 @@ int main(int argc, char** argv) {
 //        ss << "p1" << iter << ".txt";
             ss << "p1" << 1 << ".txt";
             std::ofstream fout3(ss.str());
-            for (auto p : vPts_P) {
-                Eigen::Vector2d p1 = R * p.pt + t;
-                fout3 << p1[0] << " " << p1[1] << endl;
-                // 寻找点云Q中离p1最近的两个点
-                searchPoint.x = p1.x();
-                searchPoint.y = p1.y();
-                kdtree.setInputCloud(mCloud[p.laneID]);
-                kdtree.nearestKSearch(searchPoint, K, pointIdxNKNSearch, pointNKNSquaredDistance);
-                auto nearPt = mCloud[p.laneID]->points[pointIdxNKNSearch[0]];
-                q1 = Eigen::Vector2d(nearPt.x, nearPt.y);  // todo:: 这里有bug,这个id不对
-                Correspondence_pt2pt cor;
-                cor.p = p.pt;
-                cor.q = q1;
-                vCors.push_back(cor);
-            }
-            fout3.close();
+//            for (auto p : vPts_P) {
+//                Eigen::Vector2d p1 = R * p.pt + t;
+//                fout3 << p1[0] << " " << p1[1] << endl;
+//                // 寻找点云Q中离p1最近的两个点
+//                searchPoint.x = p1.x();
+//                searchPoint.y = p1.y();
+//                kdtree.setInputCloud(mCloud[p.laneID]);
+//                kdtree.nearestKSearch(searchPoint, K, pointIdxNKNSearch, pointNKNSquaredDistance);
+//                auto nearPt = mCloud[p.laneID]->points[pointIdxNKNSearch[0]];
+//                q1 = Eigen::Vector2d(nearPt.x, nearPt.y);  // todo:: 这里有bug,这个id不对
+//                Correspondence_pt2pt cor;
+//                cor.p = p.pt;
+//                cor.q = q1;
+//                vCors.push_back(cor);
+//            }
+//            fout3.close();
 
             // step2.2: 根据point_to_line的correspondence来计算相对变换R,t
             // 算之前检查一下error
@@ -376,7 +377,7 @@ int main(int argc, char** argv) {
                 ceres::CostFunction* pCostFunction = new ceres::AutoDiffCostFunction<RegisterError_pt2pt, 1, 3>(
                         new RegisterError_pt2pt(vCors[i].p, vCors[i].q));
 
-                problem.AddResidualBlock(pCostFunction, nullptr, pT);
+                problem.AddResidualBlock(pCostFunction, new ceres::CauchyLoss(0.5), pT);
             }
 
             ceres::Solver::Options options;
@@ -402,7 +403,7 @@ int main(int argc, char** argv) {
 
     // step2.3: 最终输出pose
     cout << "theta = " << rad2deg(pT[2]) << ", t = [" << pT[0] << " " << pT[1] << "]" << endl;
-    cout << "delta is: " << "theta = " << -theta0 - rad2deg(pT[2]) << ", t = [" << t1[0] - pT[0] << " " << t1[1] - pT[1] << "]" << endl << endl;
+    cout << "delta is: " << "theta = " << - rad2deg(pT[2]) << ", t = [" << pT[0] << " " << pT[1] << "]" << endl << endl;
 
     //*******************************************************************//
 
